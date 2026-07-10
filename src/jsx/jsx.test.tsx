@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BehaviorSubject, Subject } from 'rxjs';
-import { bindChild, Fragment, h, type ElementChild } from './jsx';
+import { bindChild, bindKeyedList, Fragment, h, type ElementChild } from './jsx';
 
 describe('h — static elements', () => {
   it('creates elements with tag, className and attributes', () => {
@@ -172,5 +172,125 @@ describe('bindChild — live regions', () => {
     sub.unsubscribe();
     source$.next('y');
     expect(parent.textContent).toBe('x');
+  });
+});
+
+describe('binding disposal', () => {
+  it('unsubscribes observable props of nodes replaced in a region', () => {
+    const cls$ = new BehaviorSubject('a');
+    const region$ = new Subject<ElementChild>();
+    const el = (<div>{region$}</div>) as HTMLDivElement;
+
+    region$.next(<span className={cls$}>x</span>);
+    expect(cls$.observed).toBe(true);
+
+    region$.next('replaced');
+    expect(el.textContent).toBe('replaced');
+    expect(cls$.observed).toBe(false);
+  });
+
+  it('unsubscribes nested region subscriptions when the outer region clears', () => {
+    const inner$ = new Subject<ElementChild>();
+    const outer$ = new Subject<ElementChild>();
+    const el = (<div>{outer$}</div>) as HTMLDivElement;
+
+    outer$.next(<p>{inner$}</p>);
+    expect(inner$.observed).toBe(true);
+
+    outer$.next(null);
+    expect(el.querySelector('p')).toBeNull();
+    expect(inner$.observed).toBe(false);
+  });
+});
+
+describe('bindKeyedList — keyed reconciliation', () => {
+  it('creates a node once per key and preserves identity across emissions', () => {
+    let created = 0;
+    const list$ = new Subject<string[]>();
+    const parent = document.createElement('ul');
+    bindKeyedList(parent, list$, {
+      key: (id) => id,
+      create: (id) => {
+        created += 1;
+        const li = document.createElement('li');
+        li.textContent = id;
+        return li;
+      },
+    });
+
+    list$.next(['a', 'b']);
+    const [a1, b1] = [...parent.querySelectorAll('li')];
+
+    list$.next(['a', 'b', 'c']);
+    const items = [...parent.querySelectorAll('li')];
+    expect(created).toBe(3);
+    expect(items[0]).toBe(a1);
+    expect(items[1]).toBe(b1);
+    expect(items[2]?.textContent).toBe('c');
+  });
+
+  it('removes vanished keys and disposes their bindings', () => {
+    const cls$ = new BehaviorSubject('x');
+    const list$ = new Subject<string[]>();
+    const parent = document.createElement('div');
+    bindKeyedList(parent, list$, {
+      key: (id) => id,
+      create: (id) =>
+        id === 'bound'
+          ? ((<span className={cls$}>{id}</span>) as HTMLElement)
+          : ((<span>{id}</span>) as HTMLElement),
+    });
+
+    list$.next(['bound', 'other']);
+    expect(parent.querySelectorAll('span').length).toBe(2);
+    expect(cls$.observed).toBe(true);
+
+    list$.next(['other']);
+    expect(parent.querySelectorAll('span').length).toBe(1);
+    expect(cls$.observed).toBe(false);
+  });
+
+  it('reorders surviving nodes without recreating them', () => {
+    let created = 0;
+    const list$ = new Subject<string[]>();
+    const parent = document.createElement('div');
+    bindKeyedList(parent, list$, {
+      key: (id) => id,
+      create: (id) => {
+        created += 1;
+        const span = document.createElement('span');
+        span.textContent = id;
+        return span;
+      },
+    });
+
+    list$.next(['a', 'b', 'c']);
+    const byText = new Map([...parent.querySelectorAll('span')].map((s) => [s.textContent, s]));
+
+    list$.next(['c', 'a', 'b']);
+    const reordered = [...parent.querySelectorAll('span')];
+    expect(created).toBe(3);
+    expect(reordered.map((s) => s.textContent)).toEqual(['c', 'a', 'b']);
+    expect(reordered[0]).toBe(byText.get('c'));
+    expect(reordered[1]).toBe(byText.get('a'));
+    expect(reordered[2]).toBe(byText.get('b'));
+  });
+
+  it('handles emptying and refilling the list', () => {
+    const list$ = new Subject<string[]>();
+    const parent = document.createElement('div');
+    bindKeyedList(parent, list$, {
+      key: (id) => id,
+      create: (id) => (<span>{id}</span>) as HTMLElement,
+    });
+
+    list$.next(['a']);
+    expect(parent.querySelectorAll('span').length).toBe(1);
+
+    list$.next([]);
+    expect(parent.querySelectorAll('span').length).toBe(0);
+
+    list$.next(['b']);
+    expect(parent.textContent).toBe('b');
   });
 });
