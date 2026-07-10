@@ -82,3 +82,51 @@ Squint and it's MVI: **intents** are the delegated, class-filtered event streams
 **Wins:** no framework, ~15 small files; state lives in exactly one place (IndexedDB); offline-first falls out naturally; async complexity (fetch → parse → store → render) is uniform — everything is the same Observable vocabulary; the renderer is 30 lines.
 
 **Costs:** whole-collection re-query and whole-tree re-render on every DB write (fine at this scale, O(n) per change); delegated-events-by-class-name are stringly-typed — rename a CSS class and behavior silently breaks; no component-local state means UI-only state (like the add-feed input toggle) must also be modeled as streams; debugging long observable chains without dev tooling requires `longStackSupport`.
+
+## Postscript: the component pattern of the modern rewrite (rxjs-spa-v02)
+
+The rewrite ([hansschenker/rxjs-spa-v02](https://github.com/hansschenker/rxjs-spa-v02)) keeps yarr's contracts but inverts its rendering: components are no longer functions returning `Observable<VTree>` — they are functions that run **once** and return **real DOM**, with the observables embedded *inside* them. The reusable `Panel` component (`src/components/Panel.tsx`) is the canonical template for this style — a container with a children slot, in the spirit of the React component structure the original author admired, still with zero React:
+
+```tsx
+import { BehaviorSubject, map } from 'rxjs';
+import { h } from '../jsx/jsx';
+import type { ElementChild, PropValue } from '../jsx/jsx';
+
+export interface PanelProps {
+  title: PropValue<string>; // plain value or live stream
+  collapsed?: boolean;      // static initial config
+  children?: ElementChild;  // the slot
+}
+
+export function Panel({ title, collapsed = false, children }: PanelProps): JSX.Element {
+  const collapsed$ = new BehaviorSubject<boolean>(collapsed); // private local state
+
+  return (
+    <section className={collapsed$.pipe(map((c) => (c ? 'panel collapsed' : 'panel')))}>
+      <button className="panel-header" onClick={() => collapsed$.next(!collapsed$.getValue())}>
+        <span className="panel-title">{title}</span>
+        <span className="panel-chevron">{collapsed$.pipe(map((c) => (c ? '▸' : '▾')))}</span>
+      </button>
+      <div className="panel-body" hidden={collapsed$}>
+        {children}
+      </div>
+    </section>
+  );
+}
+```
+
+```tsx
+// usage — nesting, slots and live regions compose freely:
+<Panel title="Subscriptions">
+  <FeedList />
+</Panel>
+```
+
+Four rules make the pattern:
+
+1. **A component is a constructor, not a render function.** It runs exactly once; nothing re-renders. Nesting (`<Panel><FeedList /></Panel>`) is plain function composition at construction time — the JSX factory calls the function with its props.
+2. **`children` is a true slot.** Its type is `ElementChild`, so a slot accepts text, numbers, elements, nested components, arrays — and Observables, which become self-updating live regions inside the panel.
+3. **Props that change over time are streams; props that never change are plain values.** `PropValue<T> = T | Observable<T>` accepts both — this is the architecture's replacement for prop-driven re-rendering.
+4. **Local UI state is a private Subject bound declaratively.** The collapse flag lives in a `BehaviorSubject` and reaches the DOM only through observable props (`className`, `hidden`) — never through imperative mutation. This is the rewrite's answer to the original's `classList` surgery.
+
+To reuse the pattern in another project, copy the ~250-line runtime (`src/jsx/jsx.ts`, `src/jsx/jsx-types.d.ts`) and the tsconfig JSX wiring (`"jsx": "react"`, `"jsxFactory": "h"`, `"jsxFragmentFactory": "Fragment"`); `Panel.tsx` and its test file `Panel.test.tsx` are the working reference and usage contract.
