@@ -5,10 +5,12 @@ import { catchError, from, map, switchMap, throwError, timeout, type Observable 
  * Proxies are tried in order per request; the first success wins. Public
  * proxies are unreliable (corsproxy.io 403s non-localhost origins on its
  * free tier, allorigins has outages), so a self-hosted Cloudflare Worker
- * (see proxy/) belongs at the front of this list once deployed.
+ * belongs at the front of this list. The Worker is shared with rxjs-yarr and
+ * lives in that repo (github.com/hansschenker/rxjs-yarr, proxy/); its
+ * ALLOWED_ORIGINS must include every origin this app is served from.
  */
 export const CORS_PROXIES: readonly string[] = [
-  'https://yarr-feed-proxy.netxpert.workers.dev/?url=',
+  'https://rxjs-yarr-feed-proxy.netxpert.workers.dev/?url=',
   'https://corsproxy.io/?url=',
   'https://api.allorigins.win/raw?url=',
 ];
